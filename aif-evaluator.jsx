@@ -1,5 +1,7 @@
 import { useState, useMemo } from "react";
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:3001";
+
 // ═══════════════════════════════════════════════════════════
 // DATA CONFIG
 // ═══════════════════════════════════════════════════════════
@@ -215,6 +217,8 @@ export default function AIFEvaluator() {
   const [fundSizeInr, setFundSizeInr] = useState("");
   const [metrics, setMetrics] = useState({ irr: "", tvpi: "", dpi: "", rvpi: "", pme: "" });
   const [qual, setQual] = useState({ team: 0, portfolio: 0, fees: 0, fundSize: 0, vintage: 0, exits: 0, sourcing: 0 });
+  const [uploadState, setUploadState] = useState({ loading: false, message: "", error: false });
+  const [aiQualitativeReview, setAiQualitativeReview] = useState(null);
 
   const bm = BM[strategy] || DEFAULT_BM;
 
@@ -259,6 +263,90 @@ export default function AIFEvaluator() {
     setVintageYear(""); setFundSizeInr("");
     setMetrics({ irr: "", tvpi: "", dpi: "", rvpi: "", pme: "" });
     setQual({ team: 0, portfolio: 0, fees: 0, fundSize: 0, vintage: 0, exits: 0, sourcing: 0 });
+    setUploadState({ loading: false, message: "", error: false });
+    setAiQualitativeReview(null);
+  };
+
+  const handlePdfUpload = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setUploadState({ loading: true, message: "Extracting metrics from PDF...", error: false });
+
+    try {
+      const formData = new FormData();
+      formData.append("deck", file);
+      if (strategy) formData.append("strategy", strategy);
+      if (fundSizeInr) formData.append("fundSizeInr", fundSizeInr);
+
+      const response = await fetch(`${API_BASE_URL}/api/extract-metrics`, {
+        method: "POST",
+        body: formData,
+      });
+
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Metric extraction failed.");
+
+      const data = payload.extracted || {};
+      if (data.fundName) setFundName(data.fundName);
+      if (data.vintageYear) setVintageYear(String(data.vintageYear));
+      if (data.fundSizeInrCr) setFundSizeInr(String(data.fundSizeInrCr));
+
+      setMetrics((prev) => ({
+        ...prev,
+        irr: data.irr ?? "",
+        tvpi: data.tvpi ?? "",
+        dpi: data.dpi ?? "",
+        rvpi: data.rvpi ?? "",
+        pme: data.pme ?? "",
+      }));
+      setAiQualitativeReview(data.qualitativeEvaluation || null);
+
+      setUploadState({
+        loading: false,
+        message: `Extracted metrics from ${payload.source?.fileName || "deck"} (${payload.source?.pages || "?"} pages).`,
+        error: false,
+      });
+    } catch (error) {
+      setUploadState({
+        loading: false,
+        message: error.message || "Upload failed.",
+        error: true,
+      });
+    } finally {
+      event.target.value = "";
+    }
+  };
+
+  const AiQualitativeCard = () => {
+    if (!aiQualitativeReview) return null;
+    return (
+      <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 10, padding: 12 }}>
+        <p style={{ fontSize: 11, fontWeight: 700, color: catColor, marginBottom: 8, letterSpacing: "0.08em" }}>
+          AI QUALITATIVE REVIEW
+        </p>
+        <p style={{ fontSize: 12, color: "#94a3b8", marginBottom: 6 }}>
+          IRR realism: <span style={{ color: "#e2e8f0" }}>{aiQualitativeReview.irrRealism}</span>
+        </p>
+        <p style={{ fontSize: 12, color: "#94a3b8", marginBottom: 6 }}>
+          DPI / exits: <span style={{ color: "#e2e8f0" }}>{aiQualitativeReview.dpiExitStrength}</span>
+        </p>
+        <p style={{ fontSize: 12, color: "#94a3b8", marginBottom: 8 }}>
+          Fund size fit: <span style={{ color: "#e2e8f0" }}>{aiQualitativeReview.fundSizeFit}</span>
+        </p>
+        <p style={{ fontSize: 11, color: "#ef4444", marginBottom: 6, fontWeight: 700 }}>Red flag summary</p>
+        <p style={{ fontSize: 12, color: "#fca5a5", marginBottom: aiQualitativeReview.redFlags?.length ? 8 : 0 }}>
+          {aiQualitativeReview.redFlagSummary}
+        </p>
+        {!!aiQualitativeReview.redFlags?.length && (
+          <ul style={{ paddingLeft: 18, margin: 0 }}>
+            {aiQualitativeReview.redFlags.map((flag, i) => (
+              <li key={i} style={{ color: "#fca5a5", fontSize: 11, marginBottom: 4 }}>{flag}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
   };
 
   // ── STEP INDICATOR ──
@@ -313,6 +401,22 @@ export default function AIFEvaluator() {
   // ── STEP 0: CLASSIFICATION ──
   const Step0 = () => (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: 10, padding: 12 }}>
+        <Label>Upload PDF Fund Deck</Label>
+        <input
+          type="file"
+          accept="application/pdf"
+          onChange={handlePdfUpload}
+          disabled={uploadState.loading}
+          style={{ color: "#94a3b8", fontSize: 12, width: "100%" }}
+        />
+        {uploadState.message && (
+          <p style={{ marginTop: 8, fontSize: 11, color: uploadState.error ? "#ef4444" : "#22c55e" }}>
+            {uploadState.message}
+          </p>
+        )}
+      </div>
+      <AiQualitativeCard />
       <div>
         <Label>Fund Name</Label>
         <Input value={fundName} onChange={e => setFundName(e.target.value)} placeholder="e.g. Acme Growth Fund III" />
